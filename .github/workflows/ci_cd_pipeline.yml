@@ -1,0 +1,182 @@
+name: CI/CD Pipeline - Automated Database Management
+run-name: ${{ github.actor }} is deploying automated database management system 🚀
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  DB_HOST: ${{ secrets.DB_HOST || '127.0.0.1' }}
+  DB_USER: ${{ secrets.DB_USER || 'root' }}
+  DB_PASSWORD: ${{ secrets.DB_PASSWORD || 'Secret5555' }}
+  DB_NAME: ${{ secrets.DB_NAME || 'project_db' }}
+  DB_PORT: ${{ secrets.DB_PORT || '3306' }}
+
+jobs:
+  setup-and-deploy:
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_PASSWORD || 'Secret5555' }}
+          MYSQL_DATABASE: ${{ secrets.DB_NAME || 'project_db' }}
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+    steps:
+      # 1. Environment Setup
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install MySQL Client and Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client python3 python3-pip
+          pip3 install mysql-connector-python
+          pip3 install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc
+
+      - name: Verify MySQL Service
+        run: |
+          echo "Waiting for MySQL to be ready..."
+          for i in {30..0}; do
+            if mysql -h 127.0.0.1 -P 3306 -u root -p${{ env.DB_PASSWORD }} -e 'SELECT 1'; then
+              echo "MySQL is ready!"
+              break
+            fi
+            echo "MySQL is unavailable - sleeping"
+            sleep 2
+          done
+          
+          if [ "$i" = 0 ]; then
+            echo "MySQL failed to start"
+            exit 1
+          fi
+
+      # 2. Initial Schema Deployment
+      - name: Create Database
+        run: |
+          echo "Creating project database..."
+          mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} < sql/01_create_database.sql
+          echo "✅ Database created successfully"
+
+      - name: Deploy Initial ClimateData Table Schema
+        run: |
+          echo "Creating ClimateData table..."
+          mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} < sql/02_create_climate_table.sql
+          echo "✅ ClimateData table created successfully"
+
+      # 3. Schema Update
+      - name: Add Humidity Column
+        run: |
+          echo "Adding humidity column to ClimateData table..."
+          mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} < sql/03_add_humidity_column.sql
+          echo "✅ Humidity column added successfully"
+
+      # 4. Data Seeding
+      - name: Populate ClimateData with Sample Data
+        run: |
+          echo "Seeding ClimateData table with sample climate records..."
+          mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} < sql/04_seed_data.sql
+          echo "✅ Sample data seeded successfully"
+
+      # 5. Concurrent Query Execution
+      - name: Execute Concurrent Database Queries
+        env:
+          DB_HOST: ${{ env.DB_HOST }}
+          DB_USER: ${{ env.DB_USER }}
+          DB_PASSWORD: ${{ env.DB_PASSWORD }}
+          DB_NAME: ${{ env.DB_NAME }}
+          DB_PORT: ${{ env.DB_PORT }}
+        run: |
+          echo "Starting concurrent query execution tests..."
+          chmod +x scripts/multi_thread_queries.py
+          python3 scripts/multi_thread_queries.py
+      
+      # 5.5. Feed logs to Signoz
+      - name: Feed logs to Signoz
+        env:
+          DB_HOST: ${{ env.DB_HOST }}
+          DB_USER: ${{ env.DB_USER }}
+          DB_PASSWORD: ${{ env.DB_PASSWORD }}
+          DB_NAME: ${{ env.DB_NAME }}
+          DB_PORT: ${{ env.DB_PORT }}
+        run: |
+          echo "Running signoz.py to feed logs to Signoz..."
+          python3 signoz.py
+          echo "✅ Logs sent to Signoz"
+          echo "✅ Concurrent queries executed successfully"
+
+      # 6. Validation Step
+      - name: Validate Database Schema and Data
+        run: |
+          echo "🔍 Running validation checks..."
+          
+          echo "=== Validating ClimateData Table Structure ==="
+          mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} ${{ env.DB_NAME }} -e "DESCRIBE ClimateData;"
+          
+          echo "=== Verifying Humidity Column Exists ==="
+          HUMIDITY_EXISTS=$(mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} ${{ env.DB_NAME }} -s -N -e "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '${{ env.DB_NAME }}' AND TABLE_NAME = 'ClimateData' AND COLUMN_NAME = 'humidity';")
+          if [ "$HUMIDITY_EXISTS" -eq 1 ]; then
+            echo "✅ Humidity column exists"
+          else
+            echo "❌ Humidity column not found"
+            exit 1
+          fi
+          
+          echo "=== Verifying Sample Data ==="
+          RECORD_COUNT=$(mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} ${{ env.DB_NAME }} -s -N -e "SELECT COUNT(*) FROM ClimateData;")
+          echo "Total records in ClimateData: $RECORD_COUNT"
+          if [ "$RECORD_COUNT" -gt 0 ]; then
+            echo "✅ Sample data exists"
+          else
+            echo "❌ No sample data found"
+            exit 1
+          fi
+          
+          echo "=== Sample Records Preview ==="
+          mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} ${{ env.DB_NAME }} -e "SELECT * FROM ClimateData ORDER BY record_date DESC LIMIT 5;"
+          
+          echo "=== Data Quality Checks ==="
+          mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} ${{ env.DB_NAME }} -e "
+            SELECT 
+              COUNT(*) as total_records,
+              COUNT(DISTINCT location) as unique_locations,
+              MIN(temperature) as min_temp,
+              MAX(temperature) as max_temp,
+              AVG(humidity) as avg_humidity
+            FROM ClimateData;
+          "
+          
+          echo "✅ All validation checks completed successfully"
+
+      - name: Generate Deployment Summary
+        run: |
+          echo "🎉 CI/CD Pipeline Execution Summary"
+          echo "=================================="
+          echo "✅ Environment Setup: Completed"
+          echo "✅ Database Creation: Completed"
+          echo "✅ Initial Schema Deployment: Completed"
+          echo "✅ Schema Update (Humidity Column): Completed"
+          echo "✅ Data Seeding: Completed"
+          echo "✅ Concurrent Query Testing: Completed"
+          echo "✅ Validation: All checks passed"
+          echo ""
+          echo "Database: ${{ env.DB_NAME }}"
+          echo "Host: ${{ env.DB_HOST }}"
+          echo "Deployment completed at: $(date)"
+
+      # Additional step for debugging/troubleshooting
+      - name: Database Connection Test
+        if: failure()
+        run: |
+          echo "🔧 Troubleshooting database connection..."
+          mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} -e "SHOW DATABASES;"
+          echo "Available databases listed above"

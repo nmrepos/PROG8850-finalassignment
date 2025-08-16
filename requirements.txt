@@ -1,0 +1,20 @@
+# OpenTelemetry core
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+
+# OpenTelemetry exporters for SignOz
+opentelemetry-exporter-otlp-proto-grpc==1.21.0
+opentelemetry-exporter-otlp-proto-http==1.21.0
+
+# OpenTelemetry instrumentation
+opentelemetry-instrumentation==0.42b0
+opentelemetry-instrumentation-mysql==0.42b0
+opentelemetry-instrumentation-requests==0.42b0
+
+# Database connectors
+mysql-connector-python==8.2.0
+pymysql==1.1.0
+
+# Additional utilities
+protobuf==4.21.12
+grpcio==1.59.3
