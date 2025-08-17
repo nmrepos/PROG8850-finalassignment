@@ -172,11 +172,3 @@ jobs:
           echo "Database: ${{ env.DB_NAME }}"
           echo "Host: ${{ env.DB_HOST }}"
           echo "Deployment completed at: $(date)"
-
-      # Additional step for debugging/troubleshooting
-      - name: Database Connection Test
-        if: failure()
-        run: |
-          echo "🔧 Troubleshooting database connection..."
-          mysql -h ${{ env.DB_HOST }} -P ${{ env.DB_PORT }} -u ${{ env.DB_USER }} -p${{ env.DB_PASSWORD }} -e "SHOW DATABASES;"
-          echo "Available databases listed above"

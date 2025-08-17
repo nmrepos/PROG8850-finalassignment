@@ -62,8 +62,8 @@ class SignOzLogger:
         
         # OTLP Span Exporter for traces
         otlp_span_exporter = OTLPSpanExporter(
-            endpoint="https://otel.nidhun.me",
-            insecure=False,
+            endpoint="http://34.66.56.42:4317/",
+            insecure=True,
             headers={}
         )
         
